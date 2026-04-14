@@ -146,12 +146,15 @@ def handle_message(event):
         return
 
     if user_text == "幫助":
-        h = ("✨ 指令教學 ✨\n\n"
-             "1️⃣ 【單筆墊付】(幫朋友順手買)\n墊付/名字/品項/金額\n\n"
-             "2️⃣ 【團體分帳】(聚餐)\n分帳/項目/人1,2/金額/%\n\n"
-             "3️⃣ 【銷帳】\n已收/名字\n\n"
-             "💡 點選按鈕「查看明細」看誰欠什麼！")
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=h, quick_reply=menu))
+        help_msg = (
+            "✨ 使用指令說明 ✨\n\n"
+            "1️⃣ 【分帳】(含服務費%)\n分帳/項目/人1,2/金額/%\n(範例：分帳/晚餐/小明,小華/900/10)\n\n"
+            "2️⃣ 【記帳】(個人支出)\n支出/品項/金額\n(範例：支出/雞排/85)\n\n"
+            "3️⃣ 【收款設定】\n設定帳號/銀行/帳號\n\n"
+            "4️⃣ 【銷帳】\n已收/名字"
+        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_msg, quick_reply=menu))
+        return
 
     # 🌟 預設歡迎訊息：現在會說「哈囉 [名字]！」
     welcome_text = f"👋 哈囉 {user_name}！我是您的明細管家。\n\n點選下方按鈕，或輸入「幫助」來查看指令教學吧！"
