@@ -172,7 +172,6 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_msg, quick_reply=menu))
         return
 
-
     # 🌟 預設歡迎訊息：現在會說「哈囉 [名字]！」
     welcome_text = f"👋 哈囉 {user_name}！我是您的明細管家。\n\n點選下方按鈕，或輸入「幫助」來查看指令教學吧！"
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome_text, quick_reply=menu))
