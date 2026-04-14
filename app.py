@@ -22,15 +22,15 @@ handler = WebhookHandler(LINE_SECRET)
 
 # --- 2. 模擬校園資料庫 ---
 USER_DATA = {
-    'bank': {},      # 收款帳號 (銀行/帳號)
-    'expenses': {},  # 個人支出紀錄 [100, 200...]
-    'debts': {},     # 分帳待收紀錄 {債權人ID: {欠款人名: 金額}}
+    'bank': {},      
+    'expenses': {},  
+    'debts': {},     
 }
 
-# --- 3. 快速選單工具 (專注分帳與記帳) ---
+# --- 3. 快速選單 ---
 def get_main_menu():
     return QuickReply(items=[
-        QuickReplyButton(action=MessageAction(label="👥 誰還沒給錢？", text="查看待收")),
+        QuickReplyButton(action=MessageAction(label="📋 查看欠款明細", text="查看明細")),
         QuickReplyButton(action=MessageAction(label="💰 本月總支出", text="查詢支出")),
         QuickReplyButton(action=MessageAction(label="🏦 我的收款帳號", text="確認帳號")),
         QuickReplyButton(action=MessageAction(label="❔ 幫助說明", text="幫助")),
@@ -52,111 +52,105 @@ def handle_message(event):
     user_text = event.message.text.strip()
     menu = get_main_menu()
 
-    # --- 功能 A：聚餐分帳 (格式：分帳/項目/人1,人2/總金額/服務費%) ---
-    if user_text.startswith("分帳/"):
+    # ✨ 新增：獲取使用者的 LINE 個人檔案 (包含名字)
+    try:
+        profile = line_bot_api.get_profile(user_id)
+        user_name = profile.display_name
+    except:
+        user_name = "使用者" # 萬一 API 抓不到時的備案
+
+    # --- 功能 A：單獨記錄墊付 (墊付/名字/品項/金額) ---
+    if user_text.startswith("墊付/"):
         try:
             p = user_text.split("/")
-            item = p[1]
-            names = p[2].split(",")
-            total_amount = float(p[3])
-            # 若沒填服務費，預設為 0
-            fee_percent = float(p[4]) if len(p) > 4 else 0
-            
-            # 計算含服務費後的總額與平均金額 (含發起人自己)
-            real_total = total_amount * (1 + fee_percent / 100)
-            avg = round(real_total / (len(names) + 1), 1)
-            
-            # 記錄債務
+            name, item, amount = p[1], p[2], float(p[3])
             if user_id not in USER_DATA['debts']: USER_DATA['debts'][user_id] = {}
-            for n in names:
-                USER_DATA['debts'][user_id][n] = USER_DATA['debts'][user_id].get(n, 0) + avg
-            
-            bank = USER_DATA['bank'].get(user_id, "⚠️ 尚未設定收款帳號")
-            reply = (f"📝 【{item}】分帳計算表\n"
-                     f"💰 原始金額：{total_amount} 元\n"
-                     f"➕ 服務費：{fee_percent}%\n"
-                     f"💵 應付總額：{round(real_total, 1)} 元\n"
-                     f"--------------------\n"
-                     f"👥 每人平分：{avg} 元\n\n"
-                     f"🏦 收款資訊：\n{bank}\n\n"
-                     f"👉 同學給錢後，請對我說「已收/名字」")
+            if name not in USER_DATA['debts'][user_id]: USER_DATA['debts'][user_id][name] = []
+            USER_DATA['debts'][user_id][name].append({'item': item, 'price': amount})
+            reply = f"✅ 已紀錄明細：\n👤 對象：{name}\n📦 項目：{item}\n💰 金額：{amount} 元"
         except:
-            reply = "⚠️ 格式錯誤！範例：分帳/聚餐/小明,小華/1200/10"
+            reply = "⚠️ 範例：墊付/小明/飲料/50"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
         return
 
-    # --- 功能 B：查看待收帳款報表 ---
-    if user_text == "查看待收":
+    # --- 功能 B：團體分帳 ---
+    if user_text.startswith("分帳/"):
+        try:
+            p = user_text.split("/")
+            item, names, total = p[1], p[2].split(","), float(p[3])
+            fee = float(p[4]) if len(p) > 4 else 0
+            avg = round((total * (1 + fee/100)) / (len(names) + 1), 1)
+            if user_id not in USER_DATA['debts']: USER_DATA['debts'][user_id] = {}
+            for n in names:
+                if n not in USER_DATA['debts'][user_id]: USER_DATA['debts'][user_id][n] = []
+                USER_DATA['debts'][user_id][n].append({'item': f"分帳-{item}", 'price': avg})
+            bank = USER_DATA['bank'].get(user_id, "⚠️ 尚未設定帳號")
+            reply = f"📝 {item} 分帳完成！每人 {avg} 元。\n🏦 收款帳號：\n{bank}"
+        except:
+            reply = "範例：分帳/晚餐/小明,小華/1200/10"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        return
+
+    # --- 功能 C：查看明細 ---
+    if user_text == "查看明細":
         my_debts = USER_DATA['debts'].get(user_id, {})
         if not my_debts:
-            reply = "✅ 目前大家都還清囉！沒有待收帳款。"
+            reply = f"✅ {user_name}，目前沒有任何人欠你錢喔！"
         else:
-            res = "📋 【待收帳款清單】\n"
-            for name, amt in my_debts.items():
-                res += f"▫️ {name}：{amt} 元\n"
-            res += f"--------------------\n💰 待收總計：{round(sum(my_debts.values()), 1)} 元"
+            res = f"📋 【{user_name} 的待收清單】\n"
+            grand_total = 0
+            for name, items in my_debts.items():
+                person_total = sum(d['price'] for d in items)
+                res += f"\n👤 {name} (欠 {person_total} 元)：\n"
+                for i in items:
+                    res += f"  ▫️ {i['item']}：{i['price']} 元\n"
+                grand_total += person_total
+            res += f"\n--------------------\n💰 總計待收：{round(grand_total, 1)} 元"
             reply = res
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
         return
 
-    # --- 功能 C：銷帳 (已收/名字) ---
+    # --- 功能 D：結清 (已收/名字) ---
     if user_text.startswith("已收/"):
         name = user_text.split("/")[-1]
         if user_id in USER_DATA['debts'] and name in USER_DATA['debts'][user_id]:
             del USER_DATA['debts'][user_id][name]
-            reply = f"👌 OK！已結清 {name} 的欠款。"
+            reply = f"👌 OK！已結清 {name} 的所有紀錄。"
         else:
-            reply = f"❓ 找不到 {name} 的欠款紀錄。"
+            reply = f"❓ 找不到 {name} 的紀錄。"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
         return
 
-    # --- 功能 D：個人記帳 (支出/項目/金額) ---
+    # --- 功能 E：個人支出 ---
     if user_text.startswith("支出/"):
         try:
             p = user_text.split("/")
-            item, amount = p[1], float(p[2])
             if user_id not in USER_DATA['expenses']: USER_DATA['expenses'][user_id] = []
-            USER_DATA['expenses'][user_id].append(amount)
-            reply = f"💰 記帳成功：{item} 花了 {amount} 元。"
-        except:
-            reply = "範例：支出/午餐/100"
+            USER_DATA['expenses'][user_id].append(float(p[2]))
+            reply = f"💰 {user_name}，已記錄支出：{p[1]} {p[2]} 元。"
+        except: reply = "範例：支出/午餐/100"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
         return
 
-    # --- 功能 E：查詢總支出 ---
+    # --- 帳號與幫助 ---
     if user_text == "查詢支出":
         exps = USER_DATA['expenses'].get(user_id, [])
-        if not exps:
-            reply = "📭 目前還沒有支出紀錄。"
-        else:
-            reply = f"📊 本月個人支出統計：\n累積金額：{sum(exps)} 元\n總筆數：{len(exps)} 筆"
+        reply = f"📊 {user_name} 本月支出：{sum(exps)} 元" if exps else "📭 無支出紀錄。"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
         return
 
-    # --- 功能 F：收款帳號設定與幫助 ---
     if user_text.startswith("設定帳號/"):
         p = user_text.split("/")
         USER_DATA['bank'][user_id] = f"🏦 {p[1]} ({p[2]})"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ 收款帳號設定成功！", quick_reply=menu))
-        return
-
-    if user_text == "確認帳號":
-        bank = USER_DATA['bank'].get(user_id, "⚠️ 尚未設定帳號")
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"您的收款帳號：\n{bank}", quick_reply=menu))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ 帳號儲存成功！", quick_reply=menu))
         return
 
     if user_text == "幫助":
-        help_msg = (
-            "✨ 使用指令說明 ✨\n\n"
-            "1️⃣ 【分帳】(含服務費%)\n分帳/項目/人1,2/金額/%\n(範例：分帳/晚餐/小明,小華/900/10)\n\n"
-            "2️⃣ 【記帳】(個人支出)\n支出/品項/金額\n(範例：支出/雞排/85)\n\n"
-            "3️⃣ 【收款設定】\n設定帳號/銀行/帳號\n\n"
-            "4️⃣ 【銷帳】\n已收/名字"
-        )
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_msg, quick_reply=menu))
+        h = "✨ 指令：\n1. 墊付/名字/品項/金額\n2. 分帳/項目/人1,2/金額/%\n3. 支出/項目/金額\n4. 已收/名字"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=h, quick_reply=menu))
         return
 
-     # 🌟 預設歡迎訊息：現在會說「哈囉 [名字]！」
+    # 🌟 預設歡迎訊息：現在會說「哈囉 [名字]！」
     welcome_text = f"👋 哈囉 {user_name}！我是您的明細管家。\n\n點選下方按鈕，或輸入「幫助」來查看指令教學吧！"
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome_text, quick_reply=menu))
 
