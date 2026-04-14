@@ -32,13 +32,13 @@ USER_DATA = {
 def get_main_menu():
     """第一層：主選單"""
     return QuickReply(items=[
-        QuickReplyButton(action=MessageAction(label="👥 債務管理", text="選單/債務")),
+        QuickReplyButton(action=MessageAction(label="👥 對帳", text="選單/對帳")),
         QuickReplyButton(action=MessageAction(label="💰 個人支出", text="選單/支出")),
         QuickReplyButton(action=MessageAction(label="🏦 帳號/幫助", text="選單/設定")),
     ])
 
 def get_debt_menu():
-    """第二層：債務管理子選單"""
+    """第二層：對帳管理子選單"""
     return QuickReply(items=[
         QuickReplyButton(action=MessageAction(label="✍️ 登記墊付", text="墊付/名字/品項/金額")),
         QuickReplyButton(action=MessageAction(label="🍱 聚餐分帳", text="分帳/項目/人1,人2/金額/10")),
