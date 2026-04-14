@@ -1,27 +1,45 @@
 from flask import Flask, request, abort
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+import os
+import random
+
+from linebot import (
+    LineBotApi, WebhookHandler
+)
+from linebot.exceptions import (
+    InvalidSignatureError
+)
+from linebot.models import (
+    MessageEvent, TextMessage, TextSendMessage,
+    QuickReply, QuickReplyButton, MessageAction
+)
 
 app = Flask(__name__)
 
-import os  # 如果最上面沒有這行，請記得加上
-
+# --- 1. 設定區 ---
 LINE_ACCESS_TOKEN = os.getenv('LINE_ACCESS_TOKEN')
 LINE_SECRET = os.getenv('LINE_SECRET')
 
-# 模擬資料庫：紀錄 VIP 狀態與每個人的銀行帳號
-VIP_USERS = set() 
-USER_BANKS = {} # 格式: { 'user_id': '銀行帳號資訊' }
-DEFAULT_BANK = "⚠️ 尚未設定帳號 (輸入「設定帳號/...」)"
-VIP_PRICE = "10"
+line_bot_api = LineBotApi(LINE_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_SECRET)
 
-line_bot_api = LineBotApi(LINE_ACCESS_TOKEN.strip().replace('\n', '').replace(' ', ''))
-handler = WebhookHandler(LINE_SECRET.strip())
+# --- 2. 模擬資料庫 ---
+USER_BANKS = {}  # 收款帳號
+DEBTS = {}       # 債務紀錄：{ '債權人ID': {'欠款人名': 金額} }
+DEFAULT_BANK = "⚠️ 尚未設定帳號 (點選下方按鈕設定)"
+
+# --- 3. 快速選單工具 ---
+def get_main_menu():
+    """產生下方的快速按鈕選單"""
+    return QuickReply(items=[
+        QuickReplyButton(action=MessageAction(label="誰沒給錢？", text="誰沒給錢")),
+        QuickReplyButton(action=MessageAction(label="確認我的帳號", text="確認帳號")),
+        QuickReplyButton(action=MessageAction(label="隨機抽人請客", text="抽請客")),
+        QuickReplyButton(action=MessageAction(label="幫助說明", text="幫助")),
+    ])
 
 @app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers.get('X-Line-Signature', '')
+    signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
     try:
         handler.handle(body, signature)
@@ -33,108 +51,91 @@ def callback():
 def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text.strip()
-    
-    try:
-        # 1. 設定銀行帳號 (新功能)
-        # 格式: 設定帳號/銀行代碼/帳號
-        if user_text.startswith('設定帳號/'):
-            p = user_text.split('/')
-            if len(p) >= 3:
-                bank_info = f"🏦 銀行代碼：{p[1]}\n🔢 帳號：{p[2]}"
-                USER_BANKS[user_id] = bank_info
-                reply = f"✅ 帳號設定成功！\n今後您發起的分帳將自動顯示：\n{bank_info}"
-            else:
-                reply = "⚠️ 格式錯誤！範例：設定帳號/822/12345678"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-            return
+    menu = get_main_menu()
 
-        # 2. 訂閱解鎖
-        if user_text == "我要訂閱":
-            VIP_USERS.add(user_id)
-            reply = f"🎉 感謝支持！已解鎖 VIP 權限。\n現在可使用：\n✅ 個人化點餐分攤\n✅ 匯率換算功能"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-            return
-
-        # 取得該用戶的銀行資訊
-        current_bank = USER_BANKS.get(user_id, DEFAULT_BANK)
-
-        # 3. VIP 專屬：個人化分攤
-        # 格式: 個人/服務費/金額1/金額2...
-        if user_text.startswith('個人/'):
-            if user_id not in VIP_USERS:
-                reply = f"❌ 此為 VIP 專屬功能。\n請輸入「我要訂閱」支付 ${VIP_PRICE} 元解鎖。"
-            else:
-                p = user_text.split('/')
-                if len(p) < 3:
-                    reply = "⚠️ 格式錯誤！範例：個人/10/378/300/450"
-                else:
-                    tax_rate = float(p[1])
-                    prices = [float(x) for x in p[2:]]
-                    detail = ""
-                    total_sum = 0
-                    for i, price in enumerate(prices):
-                        final_p = price * (1 + tax_rate/100)
-                        total_sum += final_p
-                        detail += f"👤 成員 {i+1}：${final_p:,.1f}\n"
-                    
-                    reply = (
-                        f"🍽️ 【VIP 個人化分攤清單】\n"
-                        f"────────────────\n"
-                        f"⚡ 服務費率：{tax_rate}%\n"
-                        f"{detail}"
-                        f"────────────────\n"
-                        f"💰 總計收款：${total_sum:,.0f}\n"
-                        f"{current_bank}"
-                    )
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-
-        # 4. 基礎功能：詳細分帳
-        # 格式: 金額/人數/服務費/分類/品項
-        elif '/' in user_text:
-            p = user_text.split('/')
-            if len(p) >= 2:
-                amount = float(p[0])
-                num = int(p[1])
-                service = float(p[2]) if len(p) >= 3 else 0
-                category = p[3] if len(p) >= 4 else "一般"
-                item_name = p[4] if len(p) >= 5 else "未命名品項"
-                
-                total = amount * (1 + service / 100)
-                each = total / num
-                
-                icons = {"吃飯": "🍴", "購物": "🛍️", "旅遊": "✈️", "交通": "🚗", "娛樂": "🎮", "住宿": "🏨"}
-                icon = icons.get(category, "📝")
-                
-                reply = (
-                    f"{icon} 【{category}｜分帳明細】\n"
-                    f"────────────────\n"
-                    f"📦 品項：{item_name}\n"
-                    f"📈 總計：${total:,.0f} (含{service}%服務費)\n"
-                    f"👥 人數：{num} 人\n"
-                    f"💳 每人應付：${each:,.2f}\n"
-                    f"────────────────\n"
-                    f"{current_bank}"
-                )
-                if user_id not in VIP_USERS:
-                    reply += f"\n\n💡 提示：輸入「我要訂閱」只需 ${VIP_PRICE} 元解鎖 VIP 功能！"
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-            
-        # 5. 指令教學
+    # --- 功能 1：查債務 (點按鈕即可) ---
+    if user_text == "誰沒給錢":
+        my_debts = DEBTS.get(user_id, {})
+        if not my_debts:
+            reply = "✅ 目前大家都還清囉，沒有待收帳款。"
         else:
-            help_msg = (
-                "🤖 【專業分帳助手】\n\n"
-                "📌 首先請設定您的帳號：\n"
-                "👉 設定帳號/銀行代碼/帳號\n\n"
-                "1️⃣ 詳細分帳 (基礎)：\n"
-                "👉 金額/人數/服務費/分類/品項\n\n"
-                "2️⃣ 個人化分攤 (VIP)：\n"
-                "👉 個人/服務費/金額1/金額2...\n\n"
-                f"💰 輸入「我要訂閱」只需 ${VIP_PRICE} 元"
-            )
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_msg))
+            res = "📋 待收清單：\n"
+            total = 0
+            for name, amt in my_debts.items():
+                res += f"▫️ {name}：{amt} 元\n"
+                total += amt
+            res += f"--------------------\n💰 總計：{total} 元"
+            reply = res
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        return
 
-    except Exception as e:
-        print(f"Error: {e}")
+    # --- 功能 2：銷帳 (收到了/名字) ---
+    if user_text.startswith("收到了/"):
+        name = user_text.split("/")[-1]
+        if user_id in DEBTS and name in DEBTS[user_id]:
+            del DEBTS[user_id][name]
+            reply = f"👌 OK！已將 {name} 從欠款名單移除。"
+        else:
+            reply = f"❓ 找不到 {name} 的欠款紀錄。"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        return
+
+    # --- 功能 3：進階分帳處理 (分帳/項目/人1,人2/總金額) ---
+    if user_text.startswith("分帳/"):
+        try:
+            p = user_text.split("/")
+            item, names, total = p[1], p[2].split(","), float(p[3])
+            avg = round(total / (len(names) + 1), 1)
+            
+            # 存入紀錄
+            if user_id not in DEBTS: DEBTS[user_id] = {}
+            for n in names:
+                DEBTS[user_id][n] = DEBTS[user_id].get(n, 0) + avg
+            
+            bank = USER_BANKS.get(user_id, DEFAULT_BANK)
+            reply = (f"📝 {item} 分帳完成！\n每人應付：{avg} 元\n"
+                     f"--------------------\n"
+                     f"🏦 收款資訊：\n{bank}\n\n"
+                     f"👉 點擊下方「誰沒給錢」可隨時追蹤。")
+        except:
+            reply = "⚠️ 格式錯誤！範例：分帳/晚餐/小明,小華/900"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        return
+
+    # --- 功能 4：設定帳號 ---
+    if user_text.startswith("設定帳號/"):
+        p = user_text.split("/")
+        if len(p) >= 3:
+            USER_BANKS[user_id] = f"🏦 {p[1]} ({p[2]})"
+            reply = "✅ 帳號儲存成功！下次分帳會自動帶入。"
+        else:
+            reply = "⚠️ 範例：設定帳號/中信/12345"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        return
+
+    # --- 功能 5：確認帳號 & 抽請客 & 幫助 ---
+    if user_text == "確認帳號":
+        bank = USER_BANKS.get(user_id, DEFAULT_BANK)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"您的目前帳號：\n{bank}", quick_reply=menu))
+        return
+
+    if user_text == "抽請客":
+        reply = "🎲 想玩抽籤請輸入：誰請客/A/B/C"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        return
+
+    if user_text.startswith("誰請客/"):
+        names = user_text.split("/")[1:]
+        reply = f"🎲 抽獎結果：【{random.choice(names)}】 請客！🏆"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        return
+
+    # --- 預設：歡迎訊息與按鈕 ---
+    welcome = (f"👋 您好 Liao！我是您的分帳小管家。\n\n"
+               f"💡 快速上手：\n"
+               f"直接打「分帳/晚餐/小明,小華/900」\n\n"
+               f"或是點選下方選單：")
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome, quick_reply=menu))
 
 if __name__ == "__main__":
-    app.run(port=5001)
+    app.run()
