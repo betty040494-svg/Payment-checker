@@ -69,15 +69,44 @@ def callback():
 def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text.strip()
-
-    # ✨ 新增：獲取使用者的 LINE 個人檔案 (包含名字)
+    
+    # 取得 LINE 名字
     try:
         profile = line_bot_api.get_profile(user_id)
         user_name = profile.display_name
     except:
-        user_name = "使用者" # 萬一 API 抓不到時的備案
+        user_name = "使用者"
 
-    # --- 功能 A：單獨記錄墊付 (墊付/名字/品項/金額) ---
+    # ==========================
+    #   第一部分：選單導覽邏輯
+    # ==========================
+    if user_text == "選單/債務":
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="💡 【債務管理】\n您可以登記幫朋友墊付的東西，或進行多人平分帳單。", quick_reply=get_debt_menu()))
+        return
+    
+    if user_text == "選單/支出":
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="💡 【個人支出】\n記下今天的開銷，隨時統計本月花費。", quick_reply=get_expense_menu()))
+        return
+    
+    if user_text == "選單/設定":
+        setting_menu = QuickReply(items=[
+            QuickReplyButton(action=MessageAction(label="🏦 確認帳號", text="確認帳號")),
+            QuickReplyButton(action=MessageAction(label="⚙️ 設定帳號", text="設定帳號/銀行/帳號")),
+            QuickReplyButton(action=MessageAction(label="❔ 幫助說明", text="幫助")),
+            QuickReplyButton(action=MessageAction(label="⬅️ 回主選單", text="回主選單")),
+        ])
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="💡 【系統設定】\n請設定您的收款資訊或查看指令說明。", quick_reply=setting_menu))
+        return
+
+    if user_text == "回主選單":
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"👋 哈囉 {user_name}，已為您回到主選單：", quick_reply=get_main_menu()))
+        return
+
+    # ==========================
+    #   第二部分：功能執行邏輯
+    # ==========================
+
+    # 1. 墊付
     if user_text.startswith("墊付/"):
         try:
             p = user_text.split("/")
@@ -86,12 +115,11 @@ def handle_message(event):
             if name not in USER_DATA['debts'][user_id]: USER_DATA['debts'][user_id][name] = []
             USER_DATA['debts'][user_id][name].append({'item': item, 'price': amount})
             reply = f"✅ 已紀錄明細：\n👤 對象：{name}\n📦 項目：{item}\n💰 金額：{amount} 元"
-        except:
-            reply = "⚠️ 範例：墊付/小明/飲料/50"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        except: reply = "⚠️ 格式：墊付/名字/品項/金額"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=get_debt_menu()))
         return
 
-    # --- 功能 B：團體分帳 ---
+    # 2. 分帳
     if user_text.startswith("分帳/"):
         try:
             p = user_text.split("/")
@@ -103,43 +131,30 @@ def handle_message(event):
                 if n not in USER_DATA['debts'][user_id]: USER_DATA['debts'][user_id][n] = []
                 USER_DATA['debts'][user_id][n].append({'item': f"分帳-{item}", 'price': avg})
             bank = USER_DATA['bank'].get(user_id, "⚠️ 尚未設定帳號")
-            reply = f"📝 {item} 分帳完成！每人 {avg} 元。\n🏦 收款帳號：\n{bank}"
-        except:
-            reply = "範例：分帳/晚餐/小明,小華/1200/10"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+            reply = f"📝 {item} 分帳成功！每人 {avg} 元。\n🏦 收款帳號：\n{bank}"
+        except: reply = "範例：分帳/晚餐/小明,小華/1200/10"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=get_debt_menu()))
         return
 
-    # --- 功能 C：查看明細 ---
+    # 3. 查看明細
     if user_text == "查看明細":
         my_debts = USER_DATA['debts'].get(user_id, {})
         if not my_debts:
-            reply = f"✅ {user_name}，目前沒有任何人欠你錢喔！"
+            reply = f"✅ {user_name}，目前沒有人欠你錢喔！"
         else:
             res = f"📋 【{user_name} 的待收清單】\n"
             grand_total = 0
             for name, items in my_debts.items():
                 person_total = sum(d['price'] for d in items)
                 res += f"\n👤 {name} (欠 {person_total} 元)：\n"
-                for i in items:
-                    res += f"  ▫️ {i['item']}：{i['price']} 元\n"
+                for i in items: res += f"  ▫️ {i['item']}：{i['price']} 元\n"
                 grand_total += person_total
             res += f"\n--------------------\n💰 總計待收：{round(grand_total, 1)} 元"
             reply = res
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=get_debt_menu()))
         return
 
-    # --- 功能 D：結清 (已收/名字) ---
-    if user_text.startswith("已收/"):
-        name = user_text.split("/")[-1]
-        if user_id in USER_DATA['debts'] and name in USER_DATA['debts'][user_id]:
-            del USER_DATA['debts'][user_id][name]
-            reply = f"👌 OK！已結清 {name} 的所有紀錄。"
-        else:
-            reply = f"❓ 找不到 {name} 的紀錄。"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
-        return
-
-    # --- 功能 E：個人支出 ---
+    # 4. 支出
     if user_text.startswith("支出/"):
         try:
             p = user_text.split("/")
@@ -147,52 +162,54 @@ def handle_message(event):
             USER_DATA['expenses'][user_id].append(float(p[2]))
             reply = f"💰 {user_name}，已記錄支出：{p[1]} {p[2]} 元。"
         except: reply = "範例：支出/午餐/100"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=get_expense_menu()))
         return
 
-    # --- 帳號與幫助 ---
+    # 5. 銷帳、查詢、設定與幫助
+    if user_text.startswith("已收/"):
+        name = user_text.split("/")[-1]
+        if user_id in USER_DATA['debts'] and name in USER_DATA['debts'][user_id]:
+            del USER_DATA['debts'][user_id][name]
+            reply = f"👌 OK！已結清 {name} 的紀錄。"
+        else: reply = f"❓ 找不到 {name} 的紀錄。"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=get_debt_menu()))
+        return
+
     if user_text == "查詢支出":
         exps = USER_DATA['expenses'].get(user_id, [])
         reply = f"📊 {user_name} 本月支出：{sum(exps)} 元" if exps else "📭 無支出紀錄。"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=menu))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply, quick_reply=get_expense_menu()))
         return
 
     if user_text.startswith("設定帳號/"):
         p = user_text.split("/")
         USER_DATA['bank'][user_id] = f"🏦 {p[1]} ({p[2]})"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ 帳號儲存成功！", quick_reply=menu))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ 帳號儲存成功！", quick_reply=get_main_menu()))
+        return
+
+    if user_text == "確認帳號":
+        bank = USER_DATA['bank'].get(user_id, "⚠️ 尚未設定帳號")
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"您的收款帳號：\n{bank}", quick_reply=get_main_menu()))
         return
 
     if user_text == "幫助":
-        # 建立一份結構清晰、美觀的說明文件
         help_msg = (
-            f"✨ 【{user_name} 的專屬管家手冊】 ✨\n"
+            f"✨ 【{user_name} 的管家手冊】 ✨\n"
             "━━━━━━━━━━━━━━━\n\n"
-            "🔹 1. 多人分帳 (含服務費)\n"
-            "「分帳/項目/名字/金額/服務費%」\n"
-            "📍 範例：分帳/聚餐/小明,小華/1200/10\n"
-            " (自動計算總額與平均金額)\n\n"
-            "🔹 2. 單筆墊付 (明細紀錄)\n"
-            "「墊付/名字/品項/金額」\n"
-            "📍 範例：墊付/小明/美式咖啡/55\n"
-            " (適合記下隨手幫朋友買的東西)\n\n"
-            "🔹 3. 個人記帳\n"
-            "「支出/項目/金額」\n"
-            "📍 範例：支出/淡水魚丸/60\n\n"
-            "🔹 4. 結清帳款\n"
-            "「已收/名字」\n"
-            " (一鍵清除該位同學的所有欠款)\n\n"
-            "🔹 5. 收款設定\n"
-            "「設定帳號/銀行名稱/帳號」\n\n"
-            "━━━━━━━━━━━━━━━\n"
-            "💡 溫馨提示：點擊下方選單可以快速查看目前的對帳清單與個人開銷唷！"
+            "🔹 1. 多人分帳\n「分帳/項目/人/金額/%」\n\n"
+            "🔹 2. 單筆墊付\n「墊付/名字/品項/金額」\n\n"
+            "🔹 3. 個人記帳\n「支出/項目/金額」\n\n"
+            "🔹 4. 結清帳款\n「已收/名字」\n\n"
+            "💡 提示：點擊下方按鈕即可快速操作！"
         )
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_msg, quick_reply=menu))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_msg, quick_reply=get_main_menu()))
         return
 
-    # 🌟 預設歡迎訊息：現在會說「哈囉 [名字]！」
-    welcome_text = f"👋 哈囉 {user_name}！我是您的明細管家。\n\n點選下方按鈕，或輸入「幫助」來查看指令教學吧！"
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome_text, quick_reply=menu))
+    # ==========================
+    #   第三部分：預設歡迎訊息
+    # ==========================
+    welcome_text = f"👋 哈囉 {user_name}！我是您的財務管家。\n\n請點擊下方按鈕開始使用："
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome_text, quick_reply=get_main_menu()))
 
 if __name__ == "__main__":
     app.run()
