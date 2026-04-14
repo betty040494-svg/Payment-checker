@@ -146,9 +146,12 @@ def handle_message(event):
         return
 
     if user_text == "幫助":
-        h = "✨ 指令：\n1. 墊付/名字/品項/金額\n2. 分帳/項目/人1,2/金額/%\n3. 支出/項目/金額\n4. 已收/名字"
+        h = ("✨ 指令教學 ✨\n\n"
+             "1️⃣ 【單筆墊付】(幫朋友順手買)\n墊付/名字/品項/金額\n\n"
+             "2️⃣ 【團體分帳】(聚餐)\n分帳/項目/人1,2/金額/%\n\n"
+             "3️⃣ 【銷帳】\n已收/名字\n\n"
+             "💡 點選按鈕「查看明細」看誰欠什麼！")
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=h, quick_reply=menu))
-        return
 
     # 🌟 預設歡迎訊息：現在會說「哈囉 [名字]！」
     welcome_text = f"👋 哈囉 {user_name}！我是您的明細管家。\n\n點選下方按鈕，或輸入「幫助」來查看指令教學吧！"
